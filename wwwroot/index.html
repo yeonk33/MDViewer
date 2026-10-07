@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://app.local/github-markdown.css">
+<link rel="stylesheet" href="https://app.local/hl-light.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="https://app.local/hl-dark.css" media="(prefers-color-scheme: dark)">
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #8b949e; --border: #d0d7de;
+    --code-bg: #f6f8fa; --link: #0969da; --quote: #57606a; --active: rgba(0,0,0,.035);
+    --banner-bg: #fff8c5; --banner-fg: #4d2d00;
+    --sans: "Segoe UI", "Malgun Gothic", system-ui, -apple-system, sans-serif;
+    --mono: "Cascadia Mono", Consolas, "Cascadia Code", "D2Coding", ui-monospace, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #7d8590; --border: #30363d;
+      --code-bg: #161b22; --link: #4493f8; --quote: #8b949e; --active: rgba(255,255,255,.04);
+      --banner-bg: #3a2e00; --banner-fg: #ffe28a;
+    }
+  }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); }
+  [hidden] { display: none !important; }
+  body { display: flex; flex-direction: column; }
+
+  #banner {
+    background: var(--banner-bg); color: var(--banner-fg); padding: 8px 16px;
+    font: 14px var(--sans); display: flex; gap: 12px; align-items: center;
+  }
+  #banner button { font: 13px var(--sans); padding: 3px 10px; cursor: pointer; }
+
+  /* ---------- read mode (rendered) ---------- */
+  #content { flex: 1; overflow: auto; }
+  .markdown-body { box-sizing: border-box; min-width: 200px; max-width: 980px; margin: 0 auto; padding: 32px 45px; }
+
+  /* ---------- edit mode (live preview) ---------- */
+  #editor { flex: 1; min-height: 0; display: flex; }
+  /* #editor prefix: CodeMirror injects its own base theme at runtime, so we need the extra specificity */
+  #editor .cm-editor { flex: 1; height: 100%; background: var(--bg); color: var(--fg); }
+  #editor .cm-editor.cm-focused { outline: none; }
+  #editor .cm-scroller { overflow: auto; font: 16px/1.65 var(--sans); font-variant-ligatures: none; }
+  #editor .cm-content { max-width: 900px; margin: 0 auto; padding: 32px 45px 50vh; caret-color: var(--fg); }
+  #editor .cm-line { padding: 1px 0; }
+  #editor .cm-activeLine { background: var(--active); border-radius: 3px; }
+  #editor .cm-selectionBackground, #editor .cm-focused .cm-selectionBackground { background: rgba(9,105,218,.25); }
+  #editor .cm-cursor { border-left-color: var(--fg); }
+  #editor .cm-selectionMatch { background: rgba(255,200,0,.25); }
+
+  /* NOTE: padding, never margin, on .cm-line decorations — CodeMirror measures line rects without margins,
+     and a mismatch makes clicks land on the wrong line */
+  .lp-h { font-weight: 600; line-height: 1.3; padding-top: .5em !important; }
+  .lp-h1 { font-size: 2em;   padding-bottom: .2em; border-bottom: 1px solid var(--border); }
+  .lp-h2 { font-size: 1.5em; padding-bottom: .2em; border-bottom: 1px solid var(--border); }
+  .lp-h3 { font-size: 1.25em; }
+  .lp-h4 { font-size: 1.1em; }
+  .lp-h5 { font-size: 1em; }
+  .lp-h6 { font-size: .9em; color: var(--muted); }
+
+  .lp-strong { font-weight: 700; }
+  .lp-em { font-style: italic; }
+  .lp-strike { text-decoration: line-through; color: var(--muted); }
+  .lp-code { font: .9em var(--mono); background: var(--code-bg); border-radius: 4px; padding: .1em .3em; }
+  .lp-link { color: var(--link); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .lp-syntax { color: var(--muted); font-weight: 400; }
+  .lp-bullet { display: inline-block; width: 1em; text-align: center; color: var(--fg); }
+  .lp-checkbox { vertical-align: -2px; margin: 0 .5em 0 0; cursor: pointer; accent-color: var(--link); }
+  .lp-quote { border-left: 4px solid var(--border); padding-left: 12px !important; color: var(--quote); }
+  .lp-fence { font: 14px/1.5 var(--mono); font-variant-ligatures: none; background: var(--code-bg); padding-left: 12px !important; padding-right: 12px !important; }
+  .lp-fence-edge { color: var(--muted); }
+  .lp-table { font: 14px/1.5 var(--mono); font-variant-ligatures: none; white-space: pre; }
+  .lp-hrline { padding: 8px 0 !important; }
+  .lp-hr { display: inline-block; width: 100%; height: 0; border-top: 2px solid var(--border); vertical-align: middle; }
+  .lp-image { max-width: 100%; max-height: 60vh; display: block; padding: 6px 0; border-radius: 4px; }
+
+  /* code token colors (classHighlighter → tok-*) */
+  .tok-keyword, .tok-controlKeyword, .tok-operatorKeyword { color: #cf222e; }
+  .tok-string, .tok-special { color: #0a3069; }
+  .tok-comment, .tok-lineComment, .tok-blockComment { color: #6e7781; font-style: italic; }
+  .tok-number, .tok-bool, .tok-atom, .tok-literal { color: #0550ae; }
+  .tok-typeName, .tok-className, .tok-namespace { color: #953800; }
+  .tok-function, .tok-definition, .tok-propertyName { color: #8250df; }
+  .tok-variableName { color: #1f2328; }
+  .tok-tagName { color: #116329; }
+  .tok-attributeName { color: #0550ae; }
+  .tok-meta, .tok-processingInstruction { color: #6e7781; }
+  @media (prefers-color-scheme: dark) {
+    .tok-keyword, .tok-controlKeyword, .tok-operatorKeyword { color: #ff7b72; }
+    .tok-string, .tok-special { color: #a5d6ff; }
+    .tok-comment, .tok-lineComment, .tok-blockComment { color: #8b949e; }
+    .tok-number, .tok-bool, .tok-atom, .tok-literal { color: #79c0ff; }
+    .tok-typeName, .tok-className, .tok-namespace { color: #ffa657; }
+    .tok-function, .tok-definition, .tok-propertyName { color: #d2a8ff; }
+    .tok-variableName { color: #e6edf3; }
+    .tok-tagName { color: #7ee787; }
+    .tok-attributeName { color: #79c0ff; }
+    .tok-meta, .tok-processingInstruction { color: #8b949e; }
+  }
+  /* markdown's own inline tokens from classHighlighter should not fight our decorations */
+  .cm-content .tok-heading, .cm-content .tok-strong, .cm-content .tok-emphasis,
+  .cm-content .tok-link, .cm-content .tok-url, .cm-content .tok-monospace { color: inherit; font-weight: inherit; font-style: inherit; text-decoration: inherit; }
+  .cm-content .lp-fence .tok-heading { font-weight: inherit; }
+
+  /* Shown while a file is dragged over the window. Not editable, handles nothing — so the drop falls through to
+     the browser's default (a file:// navigation) which the host intercepts. Without it CodeMirror would swallow
+     the drop and paste the file's text into the document. */
+  #dropzone { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+              background: color-mix(in srgb, var(--bg) 80%, transparent); font: 22px var(--sans); color: var(--link);
+              outline: 3px dashed var(--link); outline-offset: -16px; pointer-events: auto; }
+</style>
+<script src="https://app.local/marked.min.js"></script>
+<script src="https://app.local/highlight.min.js"></script>
+</head>
+<body>
+<div id="banner" hidden>
+  <span>파일이 밖에서 변경되었습니다. 저장하지 않은 편집 내용이 있어요.</span>
+  <button id="banner-reload">디스크 내용으로 다시 불러오기</button>
+  <button id="banner-keep">내 편집 유지</button>
+</div>
+<div id="dropzone" hidden>여기에 놓으면 파일을 엽니다</div>
+<div id="editor"></div>
+<article id="content" class="markdown-body" hidden></article>
+<script>
+  marked.setOptions({ gfm: true, breaks: false });
+  const renderer = new marked.Renderer();
+  renderer.code = function (token) {
+    const lang = (token.lang || '').trim().split(/\s+/)[0];
+    const valid = lang && hljs.getLanguage(lang);
+    const html = valid ? hljs.highlight(token.text, { language: lang }).value
+                       : hljs.highlightAuto(token.text).value;
+    return '<pre><code class="hljs' + (lang ? ' language-' + lang : '') + '">' + html + '</code></pre>';
+  };
+  marked.use({ renderer });
+
+  // Links clicked inside read mode go to the host (external browser / another .md)
+  document.getElementById('content').addEventListener('click', e => {
+    const a = e.target.closest('a');
+    if (!a) return;
+    const href = a.getAttribute('href') || '';
+    if (href.startsWith('#')) return;
+    e.preventDefault();
+    window.chrome.webview.postMessage({ type: 'link', href: a.href });
+  });
+</script>
+<script src="https://app.local/editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+bin/
+obj/
+dist/
+editor/node_modules/
+*.user
+.vs/
+dist-release/
+*.zip
+icon-preview.png

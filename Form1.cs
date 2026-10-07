@@ -1,0 +1,337 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Win32;
+
+namespace MDViewer;
+
+public partial class Form1 : Form
+{
+    private const string DocHost = "https://doc.local/";
+
+    private readonly WebView2 _web = new() { Dock = DockStyle.Fill, AllowExternalDrop = true };
+    private readonly System.Windows.Forms.Timer _debounce = new() { Interval = 150 };
+    private FileSystemWatcher? _watcher;
+    private string? _file;
+    private bool _ready;
+    private bool _dirty;
+
+    // Preserved from the file as read so a save does not churn the git diff
+    private bool _crlf;
+    private bool _bom;
+
+    public Form1(string? file)
+    {
+        InitializeComponent();
+        _file = file;
+
+        Text = "MDViewer";
+        try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!); } catch { /* keep default */ }
+        Width = 1000; Height = 800;
+        StartPosition = FormStartPosition.CenterScreen;
+        AllowDrop = true;
+
+        var menu = new MenuStrip();
+        var fileMenu = new ToolStripMenuItem("&File");
+        fileMenu.DropDownItems.Add("&Open...\tCtrl+O", null, (_, _) => OpenDialog());
+        fileMenu.DropDownItems.Add("&Save\tCtrl+S", null, (_, _) => Js("editor.save()"));
+        fileMenu.DropDownItems.Add("&Reload from disk\tF5", null, (_, _) => ReloadFromDisk());
+        fileMenu.DropDownItems.Add(new ToolStripSeparator());
+        fileMenu.DropDownItems.Add("Register as default .md viewer", null, (_, _) => RegisterAssociation());
+        fileMenu.DropDownItems.Add(new ToolStripSeparator());
+        fileMenu.DropDownItems.Add("E&xit", null, (_, _) => Close());
+        menu.Items.Add(fileMenu);
+
+        var viewMenu = new ToolStripMenuItem("&View");
+        viewMenu.DropDownItems.Add("Toggle &read mode\tCtrl+E", null, (_, _) => Js("editor.toggleReadMode()"));
+        menu.Items.Add(viewMenu);
+
+        MainMenuStrip = menu;
+        Controls.Add(_web);
+        Controls.Add(menu);
+
+        _debounce.Tick += (_, _) => { _debounce.Stop(); OnExternalChange(); };
+
+        DragEnter += (_, e) => { if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true) e.Effect = DragDropEffects.Copy; };
+        DragDrop += (_, e) =>
+        {
+            if (e.Data?.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0) LoadFile(files[0]);
+        };
+
+        FormClosing += (_, e) => { if (!ConfirmDiscard()) e.Cancel = true; };
+        Shown += async (_, _) => await InitWeb();
+    }
+
+    private async Task InitWeb()
+    {
+        var userData = Path.Combine(Path.GetTempPath(), "MDViewer.WebView2");
+        var env = await CoreWebView2Environment.CreateAsync(null, userData);
+        await _web.EnsureCoreWebView2Async(env);
+        var core = _web.CoreWebView2;
+        core.Settings.AreDefaultContextMenusEnabled = false;
+        core.Settings.IsStatusBarEnabled = false;
+        core.Settings.AreBrowserAcceleratorKeysEnabled = false; // keep F5/Ctrl+F etc. for the editor
+
+        var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+        core.SetVirtualHostNameToFolderMapping("app.local", wwwroot, CoreWebView2HostResourceAccessKind.Allow);
+
+        core.WebMessageReceived += (_, e) => OnWebMessage(e.WebMessageAsJson);
+
+        // A file dropped onto the WebView2 surface arrives as a file:// request — Chromium may route it as a
+        // navigation, a new-window request, or (for non-renderable types like .md) a download. Catch all three.
+        core.NavigationStarting += (_, e) =>
+        {
+            if (TryOpenLocal(e.Uri)) e.Cancel = true;
+        };
+        core.NewWindowRequested += (_, e) =>
+        {
+            e.Handled = true;
+            if (!TryOpenLocal(e.Uri))
+                Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true });
+        };
+        core.DownloadStarting += (_, e) =>
+        {
+            e.Cancel = true;
+            e.Handled = true;
+            TryOpenLocal(e.DownloadOperation.Uri);
+        };
+
+        var loaded = new TaskCompletionSource();
+        core.NavigationCompleted += (_, _) => loaded.TrySetResult();
+        core.Navigate("https://app.local/index.html");
+        await loaded.Task;
+
+        _ready = true;
+        if (_file != null) LoadFile(_file);
+    }
+
+    private async void Js(string script)
+    {
+        if (_ready) await _web.CoreWebView2.ExecuteScriptAsync(script);
+    }
+
+    // file:///C:/x.md → open in this viewer. Returns false for anything that is not an existing local file.
+    private bool TryOpenLocal(string uri)
+    {
+        if (!uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return false;
+        try
+        {
+            var path = new Uri(uri).LocalPath;
+            if (!File.Exists(path)) return false;
+            BeginInvoke(() => LoadFile(path));
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private void OnWebMessage(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            switch (root.GetProperty("type").GetString())
+            {
+                case "save":
+                    SaveText(root.GetProperty("text").GetString() ?? "");
+                    break;
+                case "dirty":
+                    _dirty = root.GetProperty("dirty").GetBoolean();
+                    UpdateTitle();
+                    break;
+                case "cmd":
+                    switch (root.GetProperty("name").GetString())
+                    {
+                        case "open": OpenDialog(); break;
+                        case "reload": ReloadFromDisk(); break;
+                    }
+                    break;
+                case "link":
+                    OpenLink(root.GetProperty("href").GetString() ?? "");
+                    break;
+            }
+        }
+        catch { /* malformed message */ }
+    }
+
+    private void OpenLink(string href)
+    {
+        // Relative link inside the document folder (e.g. another .md file) → open it here
+        if (_file != null && href.StartsWith(DocHost, StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = Uri.UnescapeDataString(href[DocHost.Length..].Split('#', '?')[0]);
+            var target = Path.Combine(Path.GetDirectoryName(_file)!, rel.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(target)) { LoadFile(target); return; }
+        }
+        try { Process.Start(new ProcessStartInfo(href) { UseShellExecute = true }); } catch { }
+    }
+
+    private void UpdateTitle()
+    {
+        var name = _file == null ? "Untitled" : Path.GetFileName(_file);
+        Text = $"{(_dirty ? "● " : "")}{name} — MDViewer";
+    }
+
+    /// <summary>Asks about unsaved edits. Returns true when it is OK to proceed (saved or discarded).</summary>
+    private bool ConfirmDiscard()
+    {
+        if (!_dirty) return true;
+        var r = MessageBox.Show(this, "저장하지 않은 변경 내용이 있습니다. 저장할까요?", "MDViewer",
+            MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+        if (r == DialogResult.Cancel) return false;
+        if (r == DialogResult.Yes)
+        {
+            // ExecuteScript is async; pump messages until the document text comes back
+            var task = _web.CoreWebView2.ExecuteScriptAsync("editor.getDoc()");
+            while (!task.IsCompleted) Application.DoEvents();
+            var text = JsonSerializer.Deserialize<string>(task.Result) ?? "";
+            if (!SaveText(text)) return false;
+        }
+        _dirty = false;
+        return true;
+    }
+
+    private void OpenDialog()
+    {
+        if (!ConfirmDiscard()) return;
+        using var dlg = new OpenFileDialog
+        {
+            Filter = "Markdown (*.md;*.markdown;*.mdown;*.txt)|*.md;*.markdown;*.mdown;*.txt|All files|*.*"
+        };
+        if (dlg.ShowDialog(this) == DialogResult.OK) LoadFile(dlg.FileName);
+    }
+
+    private void ReloadFromDisk()
+    {
+        if (_file == null) return;
+        if (_dirty && MessageBox.Show(this, "편집 내용을 버리고 디스크의 파일을 다시 불러올까요?", "MDViewer",
+                MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+        _dirty = false;
+        LoadFile(_file);
+    }
+
+    public void LoadFile(string path)
+    {
+        var full = Path.GetFullPath(path);
+        if (_file != null && !string.Equals(full, _file, StringComparison.OrdinalIgnoreCase) && !ConfirmDiscard())
+            return;
+
+        _file = full;
+        _dirty = false;
+        UpdateTitle();
+        var dir = Path.GetDirectoryName(_file)!;
+
+        _watcher?.Dispose();
+        _watcher = new FileSystemWatcher(dir, Path.GetFileName(_file))
+        {
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName
+        };
+        FileSystemEventHandler bump = (_, _) => BeginInvoke(() => { _debounce.Stop(); _debounce.Start(); });
+        _watcher.Changed += bump;
+        _watcher.Created += bump;
+        _watcher.Renamed += (s, e) => bump(s, e);
+        _watcher.EnableRaisingEvents = true;
+
+        if (_ready)
+        {
+            _web.CoreWebView2.SetVirtualHostNameToFolderMapping("doc.local", dir, CoreWebView2HostResourceAccessKind.Allow);
+            SendDoc("editor.setDoc");
+        }
+    }
+
+    private void OnExternalChange() => SendDoc("editor.externalChanged");
+
+    private async void SendDoc(string fn)
+    {
+        if (!_ready || _file == null) return;
+        string md;
+        try { md = await ReadWithRetry(_file); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "파일을 읽을 수 없습니다", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        var json = JsonSerializer.Serialize(md);
+        await _web.CoreWebView2.ExecuteScriptAsync($"{fn}({json}, '{DocHost}')");
+    }
+
+    private bool SaveText(string text)
+    {
+        if (_file == null)
+        {
+            using var dlg = new SaveFileDialog { Filter = "Markdown (*.md)|*.md|All files|*.*", DefaultExt = "md" };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return false;
+            _file = dlg.FileName;
+            _crlf = false; _bom = false;
+        }
+        try
+        {
+            if (_crlf) text = text.Replace("\n", "\r\n");
+            var enc = new UTF8Encoding(encoderShouldEmitUTF8Identifier: _bom);
+            // Pause the watcher so our own write does not bounce back as an "external change"
+            if (_watcher != null) _watcher.EnableRaisingEvents = false;
+            File.WriteAllText(_file, text, enc);
+            if (_watcher != null) _watcher.EnableRaisingEvents = true;
+            _dirty = false;
+            UpdateTitle();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (_watcher != null) _watcher.EnableRaisingEvents = true;
+            MessageBox.Show(this, ex.Message, "저장 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+    }
+
+    // Editors often hold the file for a moment while saving — retry briefly instead of failing.
+    // Also records the file's line-ending style and BOM so saving writes it back the same way.
+    private async Task<string> ReadWithRetry(string path)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var bytes = new byte[fs.Length];
+                await fs.ReadExactlyAsync(bytes);
+                _bom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+                var text = Encoding.UTF8.GetString(bytes, _bom ? 3 : 0, bytes.Length - (_bom ? 3 : 0));
+                _crlf = text.Contains("\r\n");
+                return text.Replace("\r\n", "\n");
+            }
+            catch (IOException) when (attempt < 5) { await Task.Delay(100); }
+        }
+    }
+
+    private void RegisterAssociation()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath!;
+            const string progId = "MDViewer.md";
+            using (var k = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{progId}"))
+            {
+                k.SetValue("", "Markdown Document");
+                k.CreateSubKey("DefaultIcon").SetValue("", $"\"{exe}\",0");
+                k.CreateSubKey(@"shell\open\command").SetValue("", $"\"{exe}\" \"%1\"");
+            }
+            foreach (var ext in new[] { ".md", ".markdown", ".mdown" })
+            {
+                using var k = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ext}");
+                k.SetValue("", progId);
+                k.CreateSubKey("OpenWithProgids").SetValue(progId, Array.Empty<byte>(), RegistryValueKind.None);
+            }
+            MessageBox.Show(this,
+                "MDViewer is now registered for .md files.\n\n" +
+                "If Windows still opens another program, right-click a .md file → Open with → Choose another app → MDViewer → Always.",
+                "MDViewer", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Registration failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+}
