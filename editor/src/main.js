@@ -9,7 +9,7 @@ import {
 } from "@codemirror/view";
 import { history, defaultKeymap, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
-import { syntaxTree, syntaxHighlighting, indentUnit } from "@codemirror/language";
+import { syntaxTree, syntaxHighlighting, indentUnit, codeFolding, foldGutter, foldKeymap } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { json } from "@codemirror/lang-json";
@@ -455,6 +455,39 @@ function jsonErrorMessage(text, e) {
   return msg;
 }
 
+// ---------- folding ----------
+// Folds come from the language: JSON objects/arrays, Markdown sections under a heading (and fenced code / lists).
+// They only hide text on screen; the document and the saved file are untouched.
+// The placeholder says how much is hidden: "… 4개" (JSON members) or "… 12줄" (Markdown lines).
+function foldSummary(state, range) {
+  if (mode === "json") {
+    let node = syntaxTree(state).resolveInner(range.from, 1);
+    while (node && node.name !== "Object" && node.name !== "Array") node = node.parent;
+    if (node) {
+      const members = /^(Property|Object|Array|String|Number|True|False|Null)$/;
+      let count = 0;
+      for (let c = node.firstChild; c; c = c.nextSibling) if (members.test(c.name)) count++;
+      return `${count}개`;
+    }
+  }
+  const lines = state.doc.lineAt(range.to).number - state.doc.lineAt(range.from).number;
+  return lines > 0 ? `${lines}줄` : "";
+}
+const folding = [
+  codeFolding({
+    preparePlaceholder: foldSummary,
+    placeholderDOM(view, onclick, summary) {
+      const s = document.createElement("span");
+      s.className = "cm-foldPlaceholder";
+      s.textContent = summary ? `… ${summary}` : "…";
+      s.title = "펼치기";
+      s.onclick = onclick;
+      return s;
+    },
+  }),
+  foldGutter({ openText: "⌄", closedText: "›" }),
+];
+
 // Wrap each selection in a marker pair (e.g. **bold**); keeps the original text selected afterwards
 function wrapSelection(v, wrap) {
   const len = wrap.length;
@@ -480,7 +513,8 @@ function createView(parent) {
       EditorView.lineWrapping,
       modeConf.of(modeExtensions(mode)),
       syntaxHighlighting(classHighlighter),
-      keymap.of([...mdKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+      folding,
+      keymap.of([...mdKeymap, ...foldKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       EditorView.updateListener.of(u => {
         if (u.docChanged) setDirty(u.state.doc.toString() !== savedText);
       }),
