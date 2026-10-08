@@ -11,7 +11,7 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TieredPGO>true</TieredPGO>
     <ApplicationIcon>icon.ico</ApplicationIcon>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>MDViewer</Product>
     <AssemblyTitle>MDViewer</AssemblyTitle>
     <Authors>이연경</Authors>
@@ -25,6 +25,8 @@
   <ItemGroup>
     <!-- 단일 파일 배포에서도 exe 옆 wwwroot 폴더에 그대로 둔다 (일부만 exe에 묶이면 화면이 빈다) -->
     <Content Include="wwwroot\**" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <!-- Settings -> App icon color. 바로가기, .md 아이콘이 이 파일 경로를 가리키므로 exe 밖에 둔다 -->
+    <Content Include="icons\*.ico" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>
