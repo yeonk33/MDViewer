@@ -1,4 +1,4 @@
-﻿namespace MDViewer;
+﻿namespace Tildoc;
 
 partial class Form1
 {

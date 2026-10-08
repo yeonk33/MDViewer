@@ -5,7 +5,7 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 
-namespace MDViewer;
+namespace Tildoc;
 
 public partial class Form1 : Form
 {
@@ -28,12 +28,14 @@ public partial class Form1 : Form
     private const string DefaultIconColor = "ocean"; // the one baked into the exe (icon.ico)
     private string _iconColor;
 
+    private const string AppName = "Tildoc"; // formerly MDViewer
+
     public Form1(string? file)
     {
         InitializeComponent();
         _file = file;
 
-        Text = "MDViewer";
+        Text = AppName;
         _iconColor = LoadSettings().IconColor;
         if (!IconColors.Contains(_iconColor)) _iconColor = DefaultIconColor;
         ApplyWindowIcon();
@@ -100,7 +102,7 @@ public partial class Form1 : Form
 
     private async Task InitWeb()
     {
-        var userData = Path.Combine(Path.GetTempPath(), "MDViewer.WebView2");
+        var userData = Path.Combine(Path.GetTempPath(), "Tildoc.WebView2");
         var env = await CoreWebView2Environment.CreateAsync(null, userData);
         await _web.EnsureCoreWebView2Async(env);
         var core = _web.CoreWebView2;
@@ -209,14 +211,14 @@ public partial class Form1 : Form
     private void UpdateTitle()
     {
         var name = _file == null ? "Untitled" : Path.GetFileName(_file);
-        Text = $"{(_dirty ? "● " : "")}{name} — MDViewer";
+        Text = $"{(_dirty ? "● " : "")}{name} — {AppName}";
     }
 
     /// <summary>Asks about unsaved edits. Returns true when it is OK to proceed (saved or discarded).</summary>
     private bool ConfirmDiscard()
     {
         if (!_dirty) return true;
-        var r = MessageBox.Show(this, "저장하지 않은 변경 내용이 있습니다. 저장할까요?", "MDViewer",
+        var r = MessageBox.Show(this, "저장하지 않은 변경 내용이 있습니다. 저장할까요?", AppName,
             MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
         if (r == DialogResult.Cancel) return false;
         if (r == DialogResult.Yes)
@@ -245,7 +247,7 @@ public partial class Form1 : Form
     private void ReloadFromDisk()
     {
         if (_file == null) return;
-        if (_dirty && MessageBox.Show(this, "편집 내용을 버리고 디스크의 파일을 다시 불러올까요?", "MDViewer",
+        if (_dirty && MessageBox.Show(this, "편집 내용을 버리고 디스크의 파일을 다시 불러올까요?", AppName,
                 MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
         _dirty = false;
         LoadFile(_file);
@@ -352,7 +354,7 @@ public partial class Form1 : Form
         try
         {
             var exe = Environment.ProcessPath!;
-            const string progId = "MDViewer.md";
+            const string progId = "Tildoc.md";
             using (var k = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{progId}"))
             {
                 k.SetValue("", "Markdown Document");
@@ -368,9 +370,9 @@ public partial class Form1 : Form
             }
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
             MessageBox.Show(this,
-                "MDViewer is now registered for .md files.\n\n" +
-                "If Windows still opens another program, right-click a .md file → Open with → Choose another app → MDViewer → Always.",
-                "MDViewer", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                $"{AppName} is now registered for .md files.\n\n" +
+                $"If Windows still opens another program, right-click a .md file → Open with → Choose another app → {AppName} → Always.",
+                AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -386,11 +388,24 @@ public partial class Form1 : Form
     }
 
     private static string SettingsPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppName, "settings.json");
+
+    // Settings from the MDViewer days, carried over on the first run after the rename
+    private static string LegacySettingsPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MDViewer", "settings.json");
 
     private static AppSettings LoadSettings()
     {
-        try { return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new(); }
+        try
+        {
+            if (!File.Exists(SettingsPath) && File.Exists(LegacySettingsPath))
+            {
+                var legacy = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(LegacySettingsPath)) ?? new();
+                SaveSettings(legacy);
+                return legacy;
+            }
+            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new();
+        }
         catch { return new(); }
     }
 
@@ -440,8 +455,10 @@ public partial class Form1 : Form
         var changed = false;
         try
         {
-            // MDViewer.md: our own ProgId. Applications\MDViewer.exe: what "Open with -> Always" points at.
-            foreach (var key in new[] { @"Software\Classes\MDViewer.md", @"Software\Classes\Applications\MDViewer.exe" })
+            // Tildoc.md: our own ProgId. Applications\<exe>: what "Open with -> Always" points at. The installer re-points
+            // the old Applications\MDViewer.exe key at Tildoc.exe so an "Always" choice from the MDViewer days keeps working.
+            foreach (var key in new[] { @"Software\Classes\Tildoc.md", @"Software\Classes\Applications\Tildoc.exe",
+                                        @"Software\Classes\Applications\MDViewer.exe" })
             {
                 using var k = Registry.CurrentUser.OpenSubKey(key, writable: true);
                 if (k == null) continue;

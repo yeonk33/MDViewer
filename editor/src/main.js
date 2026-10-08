@@ -1,4 +1,4 @@
-// MDViewer editor bundle: CodeMirror 6 + Obsidian-style live preview for Markdown.
+// Tildoc editor bundle: CodeMirror 6 + Obsidian-style live preview for Markdown.
 // The document text is always the source of truth; decorations only change how it is displayed.
 // .json files get a plain JSON mode instead (no live preview, no read mode, Shift+Alt+F to pretty print).
 

@@ -1,4 +1,4 @@
-# MDViewer 테스트
+# Tildoc 테스트
 
 GitHub 스타일로 렌더링됩니다. **굵게**, *기울임*, ~~취소선~~, `인라인 코드`, [링크](https://github.com)도 됩니다.
 

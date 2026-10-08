@@ -1,4 +1,4 @@
-"""앱 아이콘 생성기. logo.png(투명 배경 검정 'md')로 색별 아이콘을 만든다.
+"""Tildoc 앱 아이콘 생성기. 둥근 사각 타일 위에 흰 물결(~, Segoe UI Semibold 글자)을 얹어 색별 아이콘을 만든다.
 
     python icons/src/make_icons.py
 
@@ -10,7 +10,7 @@
 """
 import io, os, struct
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -32,18 +32,18 @@ COLORS = {
 }
 S = 1024  # 작업 해상도
 
-# 로고: 알파가 곧 글자 모양
-_logo = Image.open(os.path.join(HERE, "logo.png")).convert("RGBA")
-_alpha = np.array(_logo)[..., 3]
-_ys, _xs = np.where(_alpha > 128)
-_glyph = _logo.split()[3].crop((_xs.min()-2, _ys.min()-2, _xs.max()+3, _ys.max()+3))
+TILDE_FONT = "C:/Windows/Fonts/seguisb.ttf"  # Segoe UI Semibold (Windows 기본 글꼴)
 
-def glyph_mask(w):
-    # 4배로 키워 흐린 뒤 다시 임계 -> 원본(256px)의 계단 외곽을 매끈하게
-    h = round(_glyph.height * w / _glyph.width)
-    g = _glyph.resize((w*4, h*4), Image.LANCZOS).filter(ImageFilter.GaussianBlur(3))
-    g = g.point(lambda v: 255 if v >= 128 else 0)
-    return g.resize((w, h), Image.LANCZOS)
+def wave_mask(size, width):
+    """size x size 마스크 가운데에 Segoe UI Semibold의 '~' 글자. width: 타일 대비 물결 폭"""
+    big = Image.new("L", (size*4, size*4), 0)
+    ImageDraw.Draw(big).text((0, 0), "~", font=ImageFont.truetype(TILDE_FONT, size*4), fill=255)
+    g = big.crop(big.getbbox())
+    w = int(size*width)
+    g = g.resize((w, round(g.height*w/g.width)), Image.LANCZOS)
+    m = Image.new("L", (size, size), 0)
+    m.paste(g, ((size-g.width)//2, (size-g.height)//2))
+    return m
 
 def squircle(size, r=0.225):
     m = Image.new("L", (size*4, size*4), 0)
@@ -64,7 +64,7 @@ def highlight(size):
     return im
 
 def render(c1, c2, inset, gscale, shadow):
-    """inset: 가장자리 여백 비율, gscale: 타일 대비 글자 폭, shadow: 바닥 그림자 여부"""
+    """inset: 가장자리 여백 비율, gscale: 타일 대비 물결 폭, shadow: 바닥 그림자 여부"""
     inner = int(S*(1-2*inset))
     off = int(S*inset)
     out = Image.new("RGBA", (S, S), (0, 0, 0, 0))
@@ -74,14 +74,12 @@ def render(c1, c2, inset, gscale, shadow):
         sh = sh.filter(ImageFilter.GaussianBlur(S*0.02)).point(lambda v: int(v*0.35))
         out.paste((0, 0, 0, 255), (0, 0, S, S), sh)
     tile = Image.alpha_composite(gradient(inner, c1, c2).convert("RGBA"), highlight(inner))
-    gw = int(inner*gscale)
-    gm = glyph_mask(gw)
-    gx, gy = (inner-gw)//2, (inner-gm.height)//2 + int(inner*0.01)
+    gm = wave_mask(inner, gscale)
     gs = Image.new("L", (inner, inner), 0)
-    gs.paste(gm, (gx, gy + int(inner*0.012)))
+    gs.paste(gm, (0, int(inner*0.012)))
     gs = gs.filter(ImageFilter.GaussianBlur(inner*0.012)).point(lambda v: int(v*0.28))
     tile.paste((0, 0, 0, 255), (0, 0, inner, inner), gs)
-    tile.paste((255, 255, 255, 255), (gx, gy, gx+gw, gy+gm.height), gm)
+    tile.paste((255, 255, 255, 255), (0, 0, inner, inner), gm)
     clipped = Image.new("RGBA", (inner, inner), (0, 0, 0, 0))
     clipped.paste(tile, (0, 0), squircle(inner))
     out.alpha_composite(clipped, (off, off))
@@ -114,8 +112,8 @@ def write_ico(path, big, small):
 def main():
     os.makedirs(os.path.join(ROOT, "icons"), exist_ok=True)
     for name, (c1, c2) in COLORS.items():
-        big = render(c1, c2, inset=0.08, gscale=0.70, shadow=True)     # 40px 이상
-        small = render(c1, c2, inset=0.02, gscale=0.84, shadow=False)  # 32px 이하: 여백 줄이고 글자 키움
+        big = render(c1, c2, inset=0.08, gscale=0.47, shadow=True)    # 40px 이상
+        small = render(c1, c2, inset=0.02, gscale=0.72, shadow=False)  # 32px 이하: 여백 줄이고 물결 키움
         write_ico(os.path.join(ROOT, "icons", f"{name}.ico"), big, small)
         if name == DEFAULT:
             write_ico(os.path.join(ROOT, "icon.ico"), big, small)

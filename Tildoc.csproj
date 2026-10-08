@@ -11,11 +11,11 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TieredPGO>true</TieredPGO>
     <ApplicationIcon>icon.ico</ApplicationIcon>
-    <Version>1.2.0</Version>
-    <Product>MDViewer</Product>
-    <AssemblyTitle>MDViewer</AssemblyTitle>
+    <Version>1.0.0</Version>
+    <Product>Tildoc</Product>
+    <AssemblyTitle>Tildoc</AssemblyTitle>
     <Authors>이연경</Authors>
-    <Description>Lightweight Markdown viewer/editor with live preview</Description>
+    <Description>Lightweight Markdown / JSON viewer and editor with live preview</Description>
   </PropertyGroup>
 
   <ItemGroup>
