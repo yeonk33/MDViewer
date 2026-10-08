@@ -1,7 +1,8 @@
 // MDViewer editor bundle: CodeMirror 6 + Obsidian-style live preview for Markdown.
 // The document text is always the source of truth; decorations only change how it is displayed.
+// .json files get a plain JSON mode instead (no live preview, no read mode, Shift+Alt+F to pretty print).
 
-import { EditorState, EditorSelection, RangeSetBuilder } from "@codemirror/state";
+import { EditorState, EditorSelection, RangeSetBuilder, Compartment } from "@codemirror/state";
 import {
   EditorView, keymap, Decoration, ViewPlugin, WidgetType,
   drawSelection, highlightActiveLine, dropCursor, rectangularSelection, crosshairCursor,
@@ -11,6 +12,7 @@ import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { syntaxTree, syntaxHighlighting, indentUnit } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
+import { json } from "@codemirror/lang-json";
 import { classHighlighter } from "@lezer/highlight";
 
 // ---------- host bridge ----------
@@ -316,6 +318,28 @@ let savedText = "";
 let dirty = false;
 let pendingExternal = null;
 let readMode = false;
+let mode = "markdown"; // "markdown" | "json", chosen by the host from the file extension
+
+// Everything that differs between modes lives in this compartment and is swapped by setMode()
+const modeConf = new Compartment();
+function modeExtensions(m) {
+  if (m === "json") return [json(), EditorView.editorAttributes.of({ class: "mode-json" })];
+  return [
+    markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: true }),
+    livePreview,
+    keymap.of([
+      { key: "Mod-b", run: v => wrapSelection(v, "**") },
+      { key: "Mod-i", run: v => wrapSelection(v, "*") },
+    ]),
+  ];
+}
+function setMode(m) {
+  m = m === "json" ? "json" : "markdown";
+  if (m === mode) return;
+  mode = m;
+  if (mode === "json" && readMode) toggleReadMode(); // read mode renders Markdown; not meaningful for JSON
+  view.dispatch({ effects: modeConf.reconfigure(modeExtensions(mode)) });
+}
 
 function setDirty(d) {
   if (d === dirty) return;
@@ -333,6 +357,7 @@ function doSave() {
 }
 
 function toggleReadMode() {
+  if (mode === "json" && !readMode) return true;
   readMode = !readMode;
   const editorEl = document.getElementById("editor");
   const readEl = document.getElementById("content");
@@ -352,9 +377,83 @@ const mdKeymap = [
   { key: "Mod-e", run: toggleReadMode },
   { key: "Mod-o", run: () => { host.post({ type: "cmd", name: "open" }); return true; } },
   { key: "F5", run: () => { host.post({ type: "cmd", name: "reload" }); return true; } },
-  { key: "Mod-b", run: v => wrapSelection(v, "**") },
-  { key: "Mod-i", run: v => wrapSelection(v, "*") },
+  { key: "Shift-Alt-f", run: () => formatJson() },
 ];
+
+// ---------- JSON pretty print ----------
+// Re-indents by walking tokens and copying every string/number/literal verbatim. JSON.stringify(JSON.parse())
+// would be shorter but rewrites values: large integer IDs lose precision, 1.0 becomes 1, \u escapes get decoded.
+function formatJson() {
+  if (mode !== "json" || !view) return false;
+  const text = view.state.doc.toString();
+  try { JSON.parse(text); }
+  catch (e) {
+    host.post({ type: "error", title: "JSON 정렬 실패", message: jsonErrorMessage(text, e) });
+    return true;
+  }
+  const out = prettyJson(text, detectIndent(text));
+  if (out !== text) {
+    view.dispatch({ changes: { from: 0, to: text.length, insert: out }, scrollIntoView: true });
+  }
+  return true;
+}
+
+// Keep the file's own indent style when it has one (first indented line), otherwise two spaces
+function detectIndent(text) {
+  const m = text.match(/\n([ \t]+)\S/);
+  if (!m) return "  ";
+  return m[1][0] === "\t" ? "\t" : " ".repeat(Math.min(m[1].length, 8));
+}
+
+function prettyJson(text, indent) {
+  let out = "", depth = 0, i = 0;
+  const n = text.length;
+  const newline = () => { out += "\n" + indent.repeat(depth); };
+  const nextSignificant = (from) => { let j = from; while (j < n && /\s/.test(text[j])) j++; return text[j]; };
+  while (i < n) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < n && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (ch === "{" || ch === "[") {
+      const close = ch === "{" ? "}" : "]";
+      if (nextSignificant(i + 1) === close) { // keep empty {} / [] on one line
+        out += ch + close;
+        i = text.indexOf(close, i + 1) + 1;
+      } else {
+        out += ch; depth++; newline(); i++;
+      }
+    } else if (ch === "}" || ch === "]") {
+      depth--; newline(); out += ch; i++;
+    } else if (ch === ",") {
+      out += ","; newline(); i++;
+    } else if (ch === ":") {
+      out += ": "; i++;
+    } else if (/\s/.test(ch)) {
+      i++;
+    } else {
+      let j = i;
+      while (j < n && !/[\s,:{}\[\]"]/.test(text[j])) j++;
+      out += text.slice(i, j);
+      i = j;
+    }
+  }
+  return text.endsWith("\n") ? out + "\n" : out;
+}
+
+// "Unexpected token } in JSON at position 120" -> add a line/column the user can find
+function jsonErrorMessage(text, e) {
+  const msg = String(e.message || e);
+  const m = msg.match(/position (\d+)/) || msg.match(/line (\d+) column (\d+)/);
+  if (m && m.length === 2) {
+    const pos = Math.min(+m[1], text.length);
+    const before = text.slice(0, pos).split("\n");
+    return `${before.length}번째 줄, ${before[before.length - 1].length + 1}번째 칸 근처에 문법 오류가 있습니다.\n\n${msg}`;
+  }
+  return msg;
+}
 
 // Wrap each selection in a marker pair (e.g. **bold**); keeps the original text selected afterwards
 function wrapSelection(v, wrap) {
@@ -379,9 +478,8 @@ function createView(parent) {
       highlightSelectionMatches(),
       indentUnit.of("  "),
       EditorView.lineWrapping,
-      markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: true }),
+      modeConf.of(modeExtensions(mode)),
       syntaxHighlighting(classHighlighter),
-      livePreview,
       keymap.of([...mdKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       EditorView.updateListener.of(u => {
         if (u.docChanged) setDirty(u.state.doc.toString() !== savedText);
@@ -397,8 +495,9 @@ window.editor = {
     view = createView(document.getElementById("editor"));
     return view;
   },
-  /** Replace the document (new file or external reload). */
-  setDoc(text, baseHref) {
+  /** Replace the document (new file or external reload). mode: "markdown" | "json" (default markdown). */
+  setDoc(text, baseHref, docMode) {
+    if (docMode !== undefined) setMode(docMode);
     let base = document.querySelector("base");
     if (!base) { base = document.createElement("base"); document.head.appendChild(base); }
     base.href = baseHref || "";
@@ -434,6 +533,7 @@ window.editor = {
   isDirty() { return dirty; },
   save: doSave,
   toggleReadMode,
+  formatJson,
 };
 
 function showBanner() {

@@ -46,6 +46,9 @@
   #editor .cm-selectionBackground, #editor .cm-focused .cm-selectionBackground { background: rgba(9,105,218,.25); }
   #editor .cm-cursor { border-left-color: var(--fg); }
   #editor .cm-selectionMatch { background: rgba(255,200,0,.25); }
+  /* JSON mode: code font, no live preview */
+  #editor .mode-json .cm-scroller { font: 14px/1.55 var(--mono); }
+  #editor .mode-json .cm-content { max-width: 1100px; }
 
   /* NOTE: padding, never margin, on .cm-line decorations — CodeMirror measures line rects without margins,
      and a mismatch makes clicks land on the wrong line */

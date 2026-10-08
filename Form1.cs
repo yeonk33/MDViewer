@@ -53,7 +53,13 @@ public partial class Form1 : Form
         menu.Items.Add(fileMenu);
 
         var viewMenu = new ToolStripMenuItem("&View");
-        viewMenu.DropDownItems.Add("Toggle &read mode\tCtrl+E", null, (_, _) => Js("editor.toggleReadMode()"));
+        var readItem = viewMenu.DropDownItems.Add("Toggle &read mode\tCtrl+E", null, (_, _) => Js("editor.toggleReadMode()"));
+        var formatItem = viewMenu.DropDownItems.Add("&Format JSON (pretty print)\tShift+Alt+F", null, (_, _) => Js("editor.formatJson()"));
+        viewMenu.DropDownOpening += (_, _) =>
+        {
+            readItem.Enabled = !IsJson;
+            formatItem.Enabled = IsJson;
+        };
         menu.Items.Add(viewMenu);
 
         var settingsMenu = new ToolStripMenuItem("&Settings");
@@ -179,6 +185,10 @@ public partial class Form1 : Form
                 case "link":
                     OpenLink(root.GetProperty("href").GetString() ?? "");
                     break;
+                case "error":
+                    MessageBox.Show(this, root.GetProperty("message").GetString(), root.GetProperty("title").GetString(),
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    break;
             }
         }
         catch { /* malformed message */ }
@@ -226,7 +236,8 @@ public partial class Form1 : Form
         if (!ConfirmDiscard()) return;
         using var dlg = new OpenFileDialog
         {
-            Filter = "Markdown (*.md;*.markdown;*.mdown;*.txt)|*.md;*.markdown;*.mdown;*.txt|All files|*.*"
+            Filter = "Markdown / JSON (*.md;*.markdown;*.mdown;*.txt;*.json)|*.md;*.markdown;*.mdown;*.txt;*.json|" +
+                     "Markdown (*.md;*.markdown;*.mdown;*.txt)|*.md;*.markdown;*.mdown;*.txt|JSON (*.json)|*.json|All files|*.*"
         };
         if (dlg.ShowDialog(this) == DialogResult.OK) LoadFile(dlg.FileName);
     }
@@ -282,8 +293,10 @@ public partial class Form1 : Form
             return;
         }
         var json = JsonSerializer.Serialize(md);
-        await _web.CoreWebView2.ExecuteScriptAsync($"{fn}({json}, '{DocHost}')");
+        await _web.CoreWebView2.ExecuteScriptAsync($"{fn}({json}, '{DocHost}', '{(IsJson ? "json" : "markdown")}')");
     }
+
+    private bool IsJson => _file != null && Path.GetExtension(_file).Equals(".json", StringComparison.OrdinalIgnoreCase);
 
     private bool SaveText(string text)
     {

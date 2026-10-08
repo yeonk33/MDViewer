@@ -11,7 +11,7 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TieredPGO>true</TieredPGO>
     <ApplicationIcon>icon.ico</ApplicationIcon>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Product>MDViewer</Product>
     <AssemblyTitle>MDViewer</AssemblyTitle>
     <Authors>이연경</Authors>
